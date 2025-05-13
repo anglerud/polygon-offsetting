@@ -11,6 +11,8 @@ pub enum OffsetError {
     CollapsedPolygon,
     UnclosedPolygon,
     RegionSortingFailed,
+    SinglePointRegion,
+    InvalidResult,
 }
 
 impl std::fmt::Display for OffsetError {
@@ -28,6 +30,8 @@ impl std::fmt::Display for OffsetError {
             ),
             OffsetError::UnclosedPolygon => write!(f, "Unclosed polygon"),
             OffsetError::RegionSortingFailed => write!(f, "No valid regions found after sorting"),
+            OffsetError::SinglePointRegion => write!(f, "Offset resulted in a single point region"),
+            OffsetError::InvalidResult => write!(f, "Offset produced an invalid result"),
         }
     }
 }

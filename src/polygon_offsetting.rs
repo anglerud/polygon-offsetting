@@ -932,67 +932,80 @@ impl Polygon {
     /// - Degenerate cases (area/perimeter ≈ 0) are rejected
     /// - Uses conservative checks to prevent invalid geometries
     pub fn offsetting(&mut self, tolerance: f64) -> Result<Offset, OffsetError> {
-        if tolerance <= 0.0 {
-            return Err(OffsetError::InvalidTolerance);
+        self.validate_input(tolerance)?;
+        
+        if let Some(zero_offset_result) = self.handle_zero_offset_case()? {
+            return Ok(zero_offset_result);
         }
 
-        // Early collapse detection for extreme cases
         if self.is_collapsed() {
             return Err(OffsetError::CollapsedPolygon);
-        }
-
-        if self.offset_margin == 0.0 {
-            let mut points: Vec<(f64, f64)> = Vec::new();
-            self.edges.iter().for_each(|e| {
-                let p1 = self.vertices.get(&e.p1).unwrap();
-                points.push((p1.x, p1.y));
-            });
-            points.push(points[0]);
-
-            return Ok(Offset {
-                area: compute_area(&points),
-                perimeter: compute_perimeter(&points),
-                contour: points,
-            });
         }
 
         let mut margin_polygon = self.create_margin_polygon(tolerance);
         self.detect_all_intersect(&mut margin_polygon);
 
-        let regions = self.detect_regions(&margin_polygon);
+        let best_region = self.find_best_region(&margin_polygon)?;
+        let offset = self.build_offset_result(&best_region)?;
 
-        // Handle truly collapsed cases
-        if regions.is_empty() {
-            if margin_polygon.vertices.len() == 1 {
-                let pt = margin_polygon.vertices.values().next().unwrap();
-                return Ok(Offset {
-                    contour: vec![(pt.x, pt.y), (pt.x, pt.y)],
-                    area: 0.0,
-                    perimeter: 0.0,
-                });
-            }
-            return Err(OffsetError::CollapsedPolygon);
+        self.validate_result(&offset)?;
+        Ok(offset)
+    }
+
+    fn validate_input(&self, tolerance: f64) -> Result<(), OffsetError> {
+        if tolerance <= 0.0 {
+            Err(OffsetError::InvalidTolerance)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn handle_zero_offset_case(&self) -> Result<Option<Offset>, OffsetError> {
+        if self.offset_margin != 0.0 {
+            return Ok(None);
         }
 
-        // Find best region (largest area)
-        let best_region = regions
-            .iter()
-            .max_by(|a, b| {
-                self.get_polygon_area(a)
-                    .total_cmp(&self.get_polygon_area(b))
-            })
-            .ok_or(OffsetError::NoValidRegions)?;
+        let mut points: Vec<(f64, f64)> = Vec::new();
+        self.edges.iter().for_each(|e| {
+            let p1 = self.vertices.get(&e.p1).unwrap();
+            points.push((p1.x, p1.y));
+        });
+        points.push(points[0]);
 
+        Ok(Some(Offset {
+            area: compute_area(&points),
+            perimeter: compute_perimeter(&points),
+            contour: points,
+        }))
+    }
+
+    fn find_best_region(&self, margin_polygon: &Polygon) -> Result<Polygon, OffsetError> {
+        let regions = self.detect_regions(margin_polygon);
+
+        if regions.is_empty() {
+            if margin_polygon.vertices.len() == 1 {
+                return Err(OffsetError::SinglePointRegion);
+            }
+            return Err(OffsetError::NoValidRegions);
+        }
+
+        regions
+            .into_iter()
+            .max_by(|a, b| self.get_polygon_area(a).total_cmp(&self.get_polygon_area(b)))
+            .ok_or(OffsetError::RegionSortingFailed)
+    }
+
+    fn build_offset_result(&self, region: &Polygon) -> Result<Offset, OffsetError> {
         let mut offset = Offset {
             contour: Vec::new(),
-            area: self.get_polygon_area(best_region),
+            area: self.get_polygon_area(region),
             perimeter: 0.0,
         };
 
-        best_region.edges.iter().for_each(|edge| {
+        region.edges.iter().for_each(|edge| {
             offset.contour.push((
-                best_region.vertices.get(&edge.p1).unwrap().x,
-                best_region.vertices.get(&edge.p1).unwrap().y,
+                region.vertices.get(&edge.p1).unwrap().x,
+                region.vertices.get(&edge.p1).unwrap().y,
             ));
         });
 
@@ -1001,15 +1014,17 @@ impl Polygon {
         }
 
         offset.perimeter = compute_perimeter(&offset.contour);
+        Ok(offset)
+    }
 
-        // Final check - allow very small but valid polygons
-        if offset.contour.len() < 3
-            || offset.area <= f64::EPSILON
-            || offset.perimeter <= f64::EPSILON
+    fn validate_result(&self, offset: &Offset) -> Result<(), OffsetError> {
+        if offset.contour.len() < 3 
+            || offset.area <= f64::EPSILON 
+            || offset.perimeter <= f64::EPSILON 
         {
             Err(OffsetError::CollapsedPolygon)
         } else {
-            Ok(offset)
+            Ok(())
         }
     }
 }
@@ -1291,6 +1306,66 @@ mod tests {
         assert!(offset.contour.len() >= 3); // Should still form a valid polygon
         assert!(offset.area > 0.0); // Should have some area
         assert!(offset.perimeter > 0.0); // Should have some perimeter
+    }
+
+    #[test]
+    fn test_validate_input() {
+        let poly = Polygon::default();
+        assert!(poly.validate_input(0.0).is_err());
+        assert!(poly.validate_input(-1.0).is_err());
+        assert!(poly.validate_input(0.1).is_ok());
+    }
+
+    #[test]
+    fn test_handle_zero_offset_case() {
+        let positions = vec![(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (0.0, 0.0)];
+        let poly = Polygon::new(&positions, 0.0).unwrap();
+        let result = poly.handle_zero_offset_case().unwrap();
+        assert!(result.is_some());
+        let offset = result.unwrap();
+        assert_eq!(offset.contour.len(), 4);
+        assert!(offset.area > 0.0);
+
+        let poly = Polygon::new(&positions, 1.0).unwrap();
+        let result = poly.handle_zero_offset_case().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_best_region() {
+        let positions = vec![(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.0)];
+        let mut poly = Polygon::new(&positions, -0.5).unwrap();
+        let mut margin_poly = poly.create_margin_polygon(0.1);
+        poly.detect_all_intersect(&mut margin_poly);
+        let best_region = poly.find_best_region(&margin_poly).unwrap();
+        assert!(poly.get_polygon_area(&best_region) > 0.0);
+    }
+
+    #[test]
+    fn test_build_offset_result() {
+        let positions = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)];
+        let poly = Polygon::new(&positions, 0.0).unwrap();
+        let region = poly.detect_regions(&poly).remove(0);
+        let offset = poly.build_offset_result(&region).unwrap();
+        assert_eq!(offset.contour.len(), 5);
+        assert!(offset.area > 0.0);
+    }
+
+    #[test]
+    fn test_validate_result() {
+        let valid_offset = Offset {
+            contour: vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)],
+            area: 0.5,
+            perimeter: 1.0 + 1.0 + 2.0f64.sqrt(),
+        };
+        assert!(Polygon::default().validate_result(&valid_offset).is_ok());
+
+        let invalid_offset = Offset {
+            contour: vec![(0.0, 0.0), (1.0, 0.0)],
+            area: 0.0,
+            perimeter: 1.0,
+        };
+        assert!(Polygon::default().validate_result(&invalid_offset).is_err());
     }
 
     #[test]
