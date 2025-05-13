@@ -88,6 +88,21 @@ fn reverse_segments(sgmts: &Vec<Segment>) -> Vec<Segment> {
 // =================================================================================
 
 impl Polygon {
+    /// Determines if the polygon has collapsed due to an inward offset.
+    ///
+    /// A polygon is considered collapsed when:
+    /// - The offset margin is negative (inward offset)
+    /// - The absolute value of the offset margin exceeds the smallest dimension
+    ///   of the polygon's bounding box
+    ///
+    /// # Returns
+    /// - `true` if the polygon has collapsed
+    /// - `false` if the offset is outward or the polygon hasn't collapsed
+    ///
+    /// # Notes
+    /// - This is a conservative check that prevents excessive inward offsets
+    /// - Only inward offsets (negative margin) can cause collapse
+    /// - Uses bounding box dimensions for computational efficiency
     fn is_collapsed(&self) -> bool {
         if self.offset_margin >= 0.0 {
             return false; // Only inward offsets can collapse
@@ -176,6 +191,22 @@ impl Polygon {
         dots
     }
 
+    /// Computes the intersection point between two edges if one exists.
+    ///
+    /// # Arguments
+    /// * `e1` - First edge as a tuple of vertices (start, end)
+    /// * `e2` - Second edge as a tuple of vertices (start, end)
+    /// * `is_inters` - Flag indicating if the intersection should be marked as special
+    ///
+    /// # Returns
+    /// - `Some(Vertex)` containing the intersection point if edges intersect properly
+    /// - `None` if edges are parallel, coincident, or don't intersect within segments
+    ///
+    /// # Notes
+    /// - Uses parametric line intersection with floating-point tolerance checks
+    /// - Only returns intersections that occur within both edge segments (not infinite lines)
+    /// - Handles near-parallel cases with numerical stability checks
+    /// - Intersection points are marked with `is_intersect` flag from input parameter
     fn edges_intersection(
         &self,
         e1: &(Vertex, Vertex),
@@ -204,6 +235,21 @@ impl Polygon {
         v_cross
     }
 
+    /// Creates a new edge by offsetting an existing edge by specified distances.
+    ///
+    /// # Arguments
+    /// * `p1` - First vertex of the original edge
+    /// * `p2` - Second vertex of the original edge
+    /// * `dx` - Horizontal offset distance
+    /// * `dy` - Vertical offset distance
+    ///
+    /// # Returns
+    /// A tuple of two vertices representing the offset edge
+    ///
+    /// # Notes
+    /// - This performs a simple translation of both endpoints
+    /// - The offset direction is determined by the sign of dx/dy
+    /// - No edge length or validity checks are performed
     fn create_offset_edge(&self, p1: &Vertex, p2: &Vertex, dx: f64, dy: f64) -> (Vertex, Vertex) {
         let mut v1: Vertex = Vertex::default();
         let mut v2: Vertex = Vertex::default();
@@ -214,6 +260,28 @@ impl Polygon {
         (v1, v2)
     }
 
+    /// Creates a polygon offset by the specified margin from the original polygon.
+    ///
+    /// This function generates a new polygon where each edge is offset by the polygon's
+    /// `offset_margin` distance along its outward normal. The resulting polygon may:
+    /// - Have rounded corners where arcs are inserted between offset edges
+    /// - Collapse edges that become too small (below tolerance)
+    /// - Contain self-intersections that need to be resolved later
+    ///
+    /// # Arguments
+    /// * `tolerance` - Minimum edge length threshold below which edges are collapsed
+    ///
+    /// # Returns
+    /// A new Polygon with:
+    /// - Offset vertices and edges
+    /// - Original offset_margin value preserved
+    /// - is_degenerate flag set to false initially
+    ///
+    /// # Notes
+    /// - For inward offsets (negative margin), may produce self-intersecting geometry
+    /// - Collapsed edges are replaced with midpoints when below tolerance length
+    /// - Arc segments are inserted between non-intersecting offset edges
+    /// - The resulting polygon may require further processing with detect_all_intersect()
     fn create_margin_polygon(&mut self, tolerance: f64) -> Polygon {
         let mut offset_edges: Vec<(Vertex, Vertex)> = Vec::new();
         let mut vertices: HashMap<usize, Vertex> = HashMap::new();
@@ -326,6 +394,28 @@ impl Polygon {
         vp.into_iter().map(|(_, id)| id).collect()
     }
 
+    /// Detects and processes all intersections between edges in a polygon.
+    ///
+    /// This function:
+    /// 1. Identifies all intersection points between polygon edges
+    /// 2. Splits intersecting edges at these points
+    /// 3. Updates the polygon structure with new vertices and split edges
+    ///
+    /// # Arguments
+    /// * `margin_polygon` - A mutable reference to the polygon being processed
+    ///
+    /// # Effects
+    /// - Modifies the input polygon by:
+    ///   - Adding intersection points as new vertices
+    ///   - Replacing original edges with split segments
+    ///   - Updating edge indices and connectivity
+    ///
+    /// # Notes
+    /// - Intersection points are marked with `is_intersect = true`
+    /// - Only processes unique edge pairs (edge1.index > edge2.index)
+    /// - Maintains original edge normals for split segments
+    /// - Preserves polygon winding direction
+    /// - Handles edge cases through the edges_intersection() method
     fn detect_all_intersect(&mut self, margin_polygon: &mut Polygon) {
         let mut poly: Polygon = Polygon::default();
         let mut indices: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -580,6 +670,22 @@ impl Polygon {
         regions
     }
 
+    /// Computes the outward-facing normal vector for an edge defined by two vertices.
+    ///
+    /// # Arguments
+    /// * `v1` - The starting vertex of the edge
+    /// * `v2` - The ending vertex of the edge
+    ///
+    /// # Returns
+    /// A Vertex representing the normalized outward normal vector with:
+    /// - x: The x-component of the normal (dy/edge_length)
+    /// - y: The y-component of the normal (-dx/edge_length)
+    /// - is_intersect: Always false
+    ///
+    /// # Notes
+    /// - The normal points to the left when looking from v1 to v2 (outward for CCW polygons)
+    /// - The vector is normalized (length = 1)
+    /// - For degenerate edges (length ≈ 0), behavior is undefined
     fn outward_edge_normal(&self, v1: &Vertex, v2: &Vertex) -> Vertex {
         let dx = v2.x - v1.x;
         let dy = v2.y - v1.y;
@@ -591,6 +697,22 @@ impl Polygon {
         }
     }
 
+    /// Converts a contour of 2D points into a HashMap of vertices.
+    ///
+    /// # Arguments
+    /// * `contour` - A vector of (x,y) coordinate tuples representing the polygon contour
+    ///
+    /// # Returns
+    /// A HashMap where:
+    /// - Keys are sequential indices (0..n-1)
+    /// - Values are Vertex structs with:
+    ///   - x/y coordinates from the input contour
+    ///   - is_intersect flag set to false
+    ///
+    /// # Notes
+    /// - Assumes contour is closed (first and last points equal)
+    /// - Skips the last point in the contour to avoid duplication
+    /// - Creates vertices in the same order as the input contour
     fn contour_to_vertices(contour: Vec<(f64, f64)>) -> HashMap<usize, Vertex> {
         let mut vtxs: HashMap<usize, Vertex> = HashMap::new();
 
@@ -604,6 +726,23 @@ impl Polygon {
         vtxs
     }
 
+    /// Calculates the area of a polygon using the shoelace formula.
+    ///
+    /// # Arguments
+    /// * `poly` - The polygon to calculate area for
+    ///
+    /// # Returns
+    /// The polygon's area as f64. The area is always positive regardless of winding direction.
+    ///
+    /// # Notes
+    /// - Uses the shoelace formula which works for both convex and concave polygons
+    /// - Assumes the polygon is closed (first and last vertices are connected)
+    /// - For self-intersecting polygons, the result may not be meaningful
+    /// - Returns 0.0 for degenerate polygons with fewer than 3 vertices
+    ///
+    /// # Algorithm
+    /// The shoelace formula sums the cross products of vertex coordinates:
+    /// Area = 0.5 * |Σ(x_i*y_{i+1} - x_{i+1}*y_i)| where i ranges from 0 to n-1
     fn get_polygon_area(&self, poly: &Polygon) -> f64 {
         let mut contours: Vec<(f64, f64)> = Vec::new();
 
@@ -624,7 +763,19 @@ impl Polygon {
         (a * -0.5).abs()
     }
 
-    // convert tuples to a Vec of Segment
+    /// Converts a vector of 2D coordinate tuples into a vector of line segments.
+    ///
+    /// # Arguments
+    /// * `contour1` - A vector of (x,y) coordinate tuples representing a polygon contour
+    ///
+    /// # Returns
+    /// A vector of Segments where each segment connects consecutive points in the input contour.
+    ///
+    /// # Notes
+    /// - Assumes the contour is closed (first and last points should be equal)
+    /// - Creates segments between consecutive points (point[i] to point[i+1])
+    /// - The last segment connects the last point back to the first point
+    /// - Empty segments (where p1 == p2) should be filtered out by the caller
     fn tuples_to_segments(contour1: &Vec<(f64, f64)>) -> Vec<Segment> {
         let mut segments: Vec<Segment> = Vec::new();
 
@@ -645,6 +796,25 @@ impl Polygon {
         segments
     }
 
+    /// Constructs a new Polygon from a set of vertices and offset parameters.
+    ///
+    /// # Arguments
+    /// * `vertices` - HashMap of vertex indices to Vertex structs defining the polygon's shape
+    /// * `offset_size` - The offset margin to be applied to this polygon
+    /// * `is_initial_polygon` - Flag indicating if this is the original polygon (true) or an offset result (false)
+    ///
+    /// # Returns
+    /// A new Polygon with:
+    /// - Provided vertices
+    /// - Edges connecting consecutive vertices (with proper indexing)
+    /// - Outward normal vectors calculated if `is_initial_polygon` is true
+    /// - Specified offset margin preserved
+    ///
+    /// # Notes
+    /// - For initial polygons, computes outward normals for each edge
+    /// - Automatically skips self-referencing edges (where p1 == p2)
+    /// - Maintains winding direction from input vertices
+    /// - Edge indices are sequential based on vertex ordering
     fn create_polygon(
         &mut self,
         vertices: HashMap<usize, Vertex>,
@@ -680,6 +850,28 @@ impl Polygon {
         polygon
     }
 
+    /// Creates a new Polygon from a contour of 2D points with the specified offset margin.
+    ///
+    /// # Arguments
+    /// * `initial_contour` - A vector of (x,y) coordinate tuples representing the polygon's contour.
+    ///                      Must be closed (first and last points equal).
+    /// * `offset_size` - The offset margin to be applied (positive for outward, negative for inward).
+    ///
+    /// # Returns
+    /// A Result containing:
+    /// - Ok(Polygon) if the input is valid
+    /// - Err(OffsetError::UnclosedPolygon) if the contour isn't closed
+    ///
+    /// # Behavior
+    /// - Automatically reverses clockwise contours to CCW (required for correct offsetting)
+    /// - Removes duplicate/contiguous points
+    /// - Calculates outward normals for all edges
+    /// - Initializes polygon with given offset margin
+    ///
+    /// # Notes
+    /// - The input contour should have at least 3 distinct points (excluding closure)
+    /// - Empty or degenerate contours may produce unexpected results
+    /// - CCW winding is required for proper outward normal calculation
     pub fn new(
         initial_contour: &Vec<(f64, f64)>,
         offset_size: f64,
@@ -714,6 +906,31 @@ impl Polygon {
         Ok(initial_polygon.create_polygon(vertices, offset_size, true))
     }
 
+    /// Computes the offset polygon from the original contour with the specified margin.
+    ///
+    /// # Arguments
+    /// * `tolerance` - The minimum acceptable edge length. Edges shorter than this will be collapsed.
+    ///
+    /// # Returns
+    /// A Result containing:
+    /// - Ok(Offset) with the offset contour, area and perimeter if successful
+    /// - Err(OffsetError) if:
+    ///   - The tolerance is invalid (≤ 0)
+    ///   - The polygon collapses completely
+    ///   - No valid regions can be found
+    ///
+    /// # Behavior
+    /// 1. Performs initial checks for trivial cases (zero offset or collapsed polygon)
+    /// 2. Creates margin polygon by offsetting edges
+    /// 3. Detects and processes all intersections
+    /// 4. Identifies valid regions from intersection results
+    /// 5. Selects the largest valid region as the result
+    ///
+    /// # Notes
+    /// - For inward offsets (negative margin), may return CollapsedPolygon error
+    /// - The result is always a closed polygon (first and last points equal)
+    /// - Degenerate cases (area/perimeter ≈ 0) are rejected
+    /// - Uses conservative checks to prevent invalid geometries
     pub fn offsetting(&mut self, tolerance: f64) -> Result<Offset, OffsetError> {
         if tolerance <= 0.0 {
             return Err(OffsetError::InvalidTolerance);
