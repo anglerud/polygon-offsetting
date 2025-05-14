@@ -1015,6 +1015,18 @@ impl Polygon {
         Ok(offset)
     }
 
+    /// Validates the input tolerance value for offsetting operations.
+    ///
+    /// # Arguments
+    /// * `tolerance` - The minimum acceptable edge length (must be > 0)
+    ///
+    /// # Returns
+    /// - Ok(()) if tolerance is valid
+    /// - Err(OffsetError::InvalidTolerance) if tolerance ≤ 0
+    ///
+    /// # Notes
+    /// - This is called before any offsetting calculations
+    /// - Prevents division by zero and other numerical issues
     fn validate_input(&self, tolerance: f64) -> Result<(), OffsetError> {
         if tolerance <= 0.0 {
             Err(OffsetError::InvalidTolerance)
@@ -1023,6 +1035,16 @@ impl Polygon {
         }
     }
 
+    /// Handles the special case where offset margin is zero (no offset needed).
+    ///
+    /// # Returns
+    /// - Some(Offset) containing the original polygon if margin = 0
+    /// - None if margin ≠ 0 (normal case)
+    ///
+    /// # Notes
+    /// - Avoids unnecessary calculations when no offset is requested
+    /// - Preserves original polygon area and perimeter
+    /// - Still validates the polygon is closed and non-degenerate
     fn handle_zero_offset_case(&self) -> Result<Option<Offset>, OffsetError> {
         if self.offset_margin != 0.0 {
             return Ok(None);
@@ -1042,6 +1064,22 @@ impl Polygon {
         }))
     }
 
+    /// Selects the best valid region from intersection results.
+    ///
+    /// # Arguments
+    /// * `margin_polygon` - The polygon containing all intersection regions
+    ///
+    /// # Returns
+    /// - Ok(Polygon) containing the largest valid region by area
+    /// - Err if:
+    ///   - No regions found (OffsetError::NoValidRegions)
+    ///   - Only single point found (OffsetError::SinglePointRegion)
+    ///   - Can't determine largest region (OffsetError::RegionSortingFailed)
+    ///
+    /// # Notes
+    /// - Prefers proper closed regions over degenerate segments
+    /// - Uses area as the selection criteria
+    /// - Filters out invalid/empty regions
     fn find_best_region(&self, margin_polygon: &Polygon) -> Result<Polygon, OffsetError> {
         let regions = self.detect_regions(margin_polygon);
 
@@ -1058,6 +1096,21 @@ impl Polygon {
             .ok_or(OffsetError::RegionSortingFailed)
     }
 
+    /// Converts a valid polygon region into an Offset result.
+    ///
+    /// # Arguments
+    /// * `region` - The selected polygon region to convert
+    ///
+    /// # Returns
+    /// Ok(Offset) containing:
+    /// - Contour points (ensured to be closed)
+    /// - Computed area
+    /// - Computed perimeter
+    ///
+    /// # Notes
+    /// - Ensures the contour is properly closed
+    /// - Calculates geometric properties
+    /// - Maintains winding direction consistency
     fn build_offset_result(&self, region: &Polygon) -> Result<Offset, OffsetError> {
         let mut offset = Offset {
             contour: Vec::new(),
@@ -1080,6 +1133,22 @@ impl Polygon {
         Ok(offset)
     }
 
+    /// Validates that an offset result meets minimum quality criteria.
+    ///
+    /// # Arguments
+    /// * `offset` - The Offset result to validate
+    ///
+    /// # Returns
+    /// - Ok(()) if:
+    ///   - Contour has ≥3 points
+    ///   - Area > 0
+    ///   - Perimeter > 0
+    /// - Err(OffsetError::CollapsedPolygon) if invalid
+    ///
+    /// # Notes
+    /// - Prevents returning degenerate results
+    /// - Uses floating-point epsilon for comparisons
+    /// - Called as final validation step
     fn validate_result(&self, offset: &Offset) -> Result<(), OffsetError> {
         if offset.contour.len() < 3 
             || offset.area <= f64::EPSILON 
