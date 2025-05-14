@@ -593,7 +593,129 @@ impl Polygon {
         *margin_polygon = poly;
     }
 
-    /// Detects all closed regions in a possibly self-intersecting polygon.
+    /// Finds the next available vertex to start tracing a new region from.
+    ///
+    /// # Arguments
+    /// * `remaining` - Mutable reference to list of remaining vertex indices
+    /// * `map` - Edge map (vertex index -> edge indices)
+    ///
+    /// # Returns
+    /// Some(vertex_index) if a valid starting vertex is found, None otherwise
+    ///
+    /// # Notes
+    /// - Prefers vertices that have outgoing edges
+    /// - Removes found vertex from remaining list
+    fn find_start_vertex(&self, remaining: &mut Vec<usize>, map: &HashMap<usize, Vec<usize>>) -> Option<usize> {
+        remaining.iter()
+            .find(|&&id| map.get(&id).map_or(false, |edges| !edges.is_empty()))
+            .copied()
+            .map(|id| {
+                remaining.retain(|&r| r != id);
+                id
+            })
+    }
+
+    /// Traces edges to form a complete region starting from given vertex.
+    ///
+    /// # Arguments
+    /// * `start_idx` - Vertex index to start tracing from
+    /// * `polygon` - Reference to original polygon
+    /// * `map` - Edge map (vertex index -> edge indices)
+    /// * `remaining` - Mutable reference to list of remaining vertex indices
+    ///
+    /// # Returns
+    /// A Polygon representing the traced region
+    ///
+    /// # Notes
+    /// - Handles both regular vertices and intersection points
+    /// - Tracks visited vertices to prevent infinite loops
+    /// - Updates remaining vertices list
+    fn trace_region(
+        &self,
+        start_idx: usize,
+        polygon: &Polygon,
+        map: &HashMap<usize, Vec<usize>>,
+        remaining: &mut Vec<usize>,
+    ) -> Polygon {
+        let mut current_region = Polygon {
+            edges: Vec::new(),
+            vertices: HashMap::new(),
+            offset_margin: polygon.offset_margin,
+            is_degenerate: false,
+        };
+
+        let mut idx = start_idx;
+        let mut prev_edge_index: Option<usize> = None;
+        let mut has_moved = false;
+        let mut visited_in_region = HashSet::new();
+
+        loop {
+            // Check for infinite loop in this region
+            if visited_in_region.contains(&idx) {
+                break;
+            }
+            visited_in_region.insert(idx);
+
+            // Skip if vertex has no edges or we've completed a loop
+            if (current_region.vertices.contains_key(&idx) && has_moved)
+                || map.get(&idx).map_or(true, |v| v.is_empty())
+            {
+                break;
+            }
+
+            if let Some(vertex) = polygon.vertices.get(&idx) {
+                current_region.vertices.insert(idx, *vertex);
+                remaining.retain(|&r| r != idx);
+
+                let edges = map.get(&idx).unwrap();
+                let edge_index = if vertex.is_intersect {
+                    // For intersection points, choose edge that isn't the one we came from
+                    edges.iter().find(|&&e| Some(e) != prev_edge_index).copied()
+                } else {
+                    // For regular points, just take first edge
+                    edges.first().copied()
+                };
+
+                if let Some(edge_index) = edge_index {
+                    let edge = &polygon.edges[edge_index];
+                    // Skip if this would create a self-referencing edge
+                    if edge.p1 == edge.p2 {
+                        break;
+                    }
+
+                    current_region.edges.push(Edge {
+                        p1: idx,
+                        p2: edge.p2,
+                        outward_normal: edge.outward_normal,
+                        index: current_region.edges.len(),
+                    });
+
+                    prev_edge_index = Some(edge_index);
+                    idx = edge.p2;
+                    has_moved = true;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        current_region
+    }
+
+    /// Determines if a traced region should be added to the results.
+    ///
+    /// # Arguments
+    /// * `region` - The region to validate
+    ///
+    /// # Returns
+    /// true if the region should be kept (has 1 or ≥3 edges), false otherwise
+    fn should_add_region(&self, region: &Polygon) -> bool {
+        region.edges.len() >= 3 || region.edges.len() == 1
+    }
+
+    /// Detects and processes all closed regions in a possibly self-intersecting polygon.
     ///
     /// This function takes a polygon that may contain self-intersections and splits it
     /// into multiple non-intersecting regions. Each region is returned as either:
@@ -620,10 +742,7 @@ impl Polygon {
     /// - Degenerate single-edge regions may be returned for collapsed geometry
     /// - Intersection points must be marked with is_intersect = true
     fn detect_regions(&self, polygon: &Polygon) -> Vec<Polygon> {
-        // each region is described by a polygon
         let mut regions: Vec<Polygon> = Vec::new();
-
-        // remaining is a vect of the indices of the vertices
         let mut remaining: Vec<usize> = polygon.vertices.keys().copied().collect();
 
         // Create edge map: vertex index -> list of edge indices
@@ -650,79 +769,15 @@ impl Polygon {
         while !remaining.is_empty() && iteration_count < max_iterations {
             iteration_count += 1;
 
-            let start_idx = remaining[0];
-            let mut current_region = Polygon {
-                edges: Vec::new(),
-                vertices: HashMap::new(),
-                offset_margin: polygon.offset_margin,
-                is_degenerate: false,
-            };
+            if let Some(start_idx) = self.find_start_vertex(&mut remaining, &map) {
+                let mut current_region = self.trace_region(start_idx, polygon, &map, &mut remaining);
 
-            let mut idx = start_idx;
-            let mut prev_edge_index: Option<usize> = None;
-            let mut has_moved = false;
-            let mut visited_in_region = HashSet::new();
-
-            loop {
-                // Check for infinite loop in this region
-                if visited_in_region.contains(&idx) {
-                    // We've looped back to a vertex without completing the region
-                    break;
-                }
-                visited_in_region.insert(idx);
-
-                // Skip if vertex has no edges or we've completed a loop
-                if (current_region.vertices.contains_key(&idx) && has_moved)
-                    || map.get(&idx).map_or(true, |v| v.is_empty())
-                {
-                    break;
-                }
-
-                if let Some(vertex) = polygon.vertices.get(&idx) {
-                    current_region.vertices.insert(idx, *vertex);
-                    remaining.retain(|&r| r != idx);
-
-                    let edges = map.get(&idx).unwrap();
-                    let edge_index = if vertex.is_intersect {
-                        // For intersection points, choose edge that isn't the one we came from
-                        edges.iter().find(|&&e| Some(e) != prev_edge_index).copied()
-                    } else {
-                        // For regular points, just take first edge
-                        edges.first().copied()
-                    };
-
-                    if let Some(edge_index) = edge_index {
-                        let edge = &polygon.edges[edge_index];
-                        // Skip if this would create a self-referencing edge
-                        if edge.p1 == edge.p2 {
-                            break;
-                        }
-
-                        current_region.edges.push(Edge {
-                            p1: idx,
-                            p2: edge.p2,
-                            outward_normal: edge.outward_normal,
-                            index: current_region.edges.len(),
-                        });
-
-                        prev_edge_index = Some(edge_index);
-                        idx = edge.p2;
-                        has_moved = true;
-                    } else {
-                        break;
+                if self.should_add_region(&current_region) {
+                    if current_region.edges.len() < 3 {
+                        current_region.is_degenerate = true;
                     }
-                } else {
-                    break;
+                    regions.push(current_region);
                 }
-            }
-
-            // Only add regions that have at least 3 edges (proper polygons)
-            // or exactly 1 edge (degenerate line segments)
-            if current_region.edges.len() >= 3 || current_region.edges.len() == 1 {
-                if current_region.edges.len() < 3 {
-                    current_region.is_degenerate = true;
-                }
-                regions.push(current_region);
             }
         }
 
