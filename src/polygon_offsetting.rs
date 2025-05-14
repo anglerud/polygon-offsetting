@@ -38,6 +38,18 @@ struct Segment {
     p2: (f64, f64),
 }
 
+/// Computes the area of a polygon using the shoelace formula.
+///
+/// # Arguments
+/// * `contours` - A vector of (x,y) coordinate tuples representing the polygon's vertices
+///
+/// # Returns
+/// The polygon's area as f64 (always positive)
+///
+/// # Notes
+/// - Assumes the polygon is closed (first and last points should be equal)
+/// - Works for both convex and concave polygons
+/// - Returns 0.0 for empty input or degenerate cases
 #[inline]
 fn compute_area(contours: &Vec<(f64, f64)>) -> f64 {
     let mut a = 0.0;
@@ -50,6 +62,17 @@ fn compute_area(contours: &Vec<(f64, f64)>) -> f64 {
     (a * -0.5).abs()
 }
 
+/// Computes the perimeter of a polygon by summing edge lengths.
+///
+/// # Arguments
+/// * `contour2d` - A vector of (x,y) coordinate tuples representing the polygon's vertices
+///
+/// # Returns
+/// The total perimeter length as f64
+///
+/// # Notes
+/// - Assumes the polygon is closed (first and last points should be equal)
+/// - Skips the last edge if it would be zero-length (duplicate start/end point)
 fn compute_perimeter(contour2d: &Vec<(f64, f64)>) -> f64 {
     let mut perimeter2d = 0.;
     for i in 0..(contour2d.len() - 1) {
@@ -60,21 +83,61 @@ fn compute_perimeter(contour2d: &Vec<(f64, f64)>) -> f64 {
     perimeter2d
 }
 
+/// Computes the Euclidean distance between two points.
+///
+/// # Arguments
+/// * `p1` - First point as (x,y) tuple
+/// * `p2` - Second point as (x,y) tuple
+///
+/// # Returns
+/// The distance between p1 and p2 as f64
+///
+/// # Notes
+/// - Uses standard Euclidean distance formula
+/// - Handles all finite coordinate values
 #[inline]
 fn get_dist(p1: (f64, f64), p2: (f64, f64)) -> f64 {
     ((p2.0 - p1.0).powi(2) + (p2.1 - p1.1).powi(2)).sqrt()
 }
 
+/// Subtracts two 2D vectors component-wise.
+///
+/// # Arguments
+/// * `v1` - First vector as (x,y) tuple  
+/// * `v2` - Second vector as (x,y) tuple
+///
+/// # Returns
+/// Resulting vector as (x,y) tuple where x = v1.x - v2.x, y = v1.y - v2.y
 #[inline]
 fn vector_sub(v1: (f64, f64), v2: (f64, f64)) -> (f64, f64) {
     (v1.0 - v2.0, v1.1 - v2.1)
 }
 
+/// Adds two 2D vectors component-wise.
+///
+/// # Arguments
+/// * `v1` - First vector as (x,y) tuple
+/// * `v2` - Second vector as (x,y) tuple
+///
+/// # Returns  
+/// Resulting vector as (x,y) tuple where x = v1.x + v2.x, y = v1.y + v2.y
 #[inline]
 fn vector_add(v1: (f64, f64), v2: (f64, f64)) -> (f64, f64) {
     (v1.0 + v2.0, v1.1 + v2.1)
 }
 
+/// Reverses the order and direction of a sequence of line segments.
+///
+/// # Arguments
+/// * `sgmts` - Vector of Segments to reverse
+///
+/// # Returns
+/// New vector of Segments where:
+/// - The segment order is reversed
+/// - Each segment's start/end points are swapped
+///
+/// # Notes
+/// - Useful for changing polygon winding direction
 #[inline]
 fn reverse_segments(sgmts: &Vec<Segment>) -> Vec<Segment> {
     let mut segments: Vec<Segment> = Vec::new();
