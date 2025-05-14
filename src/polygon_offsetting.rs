@@ -1260,6 +1260,67 @@ mod tests {
     // Tests that deal with `detect_regions` and the cases where we have
     // orphaned vertices.
     #[test]
+    fn test_find_start_vertex() {
+        let poly = Polygon::default();
+        let mut remaining = vec![1, 2, 3];
+        let mut map = HashMap::new();
+        map.insert(1, vec![]); // No edges
+        map.insert(2, vec![0]); // Has edge
+        map.insert(3, vec![]); // No edges
+
+        // Should find vertex 2 since it has edges
+        assert_eq!(poly.find_start_vertex(&mut remaining, &map), Some(2));
+        assert_eq!(remaining, vec![1, 3]);
+
+        // With no edges left, should return None
+        assert_eq!(poly.find_start_vertex(&mut remaining, &map), None);
+    }
+
+    #[test]
+    fn test_trace_region() {
+        let mut poly = Polygon::default();
+        let mut map = HashMap::new();
+        let mut remaining = vec![0, 1, 2];
+
+        // Create simple triangle
+        poly.vertices.insert(0, Vertex { x: 0.0, y: 0.0, is_intersect: false });
+        poly.vertices.insert(1, Vertex { x: 1.0, y: 0.0, is_intersect: false });
+        poly.vertices.insert(2, Vertex { x: 0.5, y: 1.0, is_intersect: false });
+
+        poly.edges.push(Edge { p1: 0, p2: 1, index: 0, outward_normal: Vertex::default() });
+        poly.edges.push(Edge { p1: 1, p2: 2, index: 1, outward_normal: Vertex::default() });
+        poly.edges.push(Edge { p1: 2, p2: 0, index: 2, outward_normal: Vertex::default() });
+
+        map.insert(0, vec![0]);
+        map.insert(1, vec![1]);
+        map.insert(2, vec![2]);
+
+        let region = poly.trace_region(0, &poly, &map, &mut remaining);
+        assert_eq!(region.edges.len(), 3);
+        assert_eq!(remaining.len(), 0);
+    }
+
+    #[test]
+    fn test_should_add_region() {
+        let poly = Polygon::default();
+        let mut valid_region = Polygon::default();
+        valid_region.edges.push(Edge::default());
+        valid_region.edges.push(Edge::default());
+        valid_region.edges.push(Edge::default());
+
+        let mut degenerate_region = Polygon::default();
+        degenerate_region.edges.push(Edge::default());
+
+        let mut invalid_region = Polygon::default();
+        invalid_region.edges.push(Edge::default());
+        invalid_region.edges.push(Edge::default());
+
+        assert!(poly.should_add_region(&valid_region));
+        assert!(poly.should_add_region(&degenerate_region));
+        assert!(!poly.should_add_region(&invalid_region));
+    }
+
+    #[test]
     fn test_detect_regions_with_orphaned_vertex() {
         let poly = Polygon::default();
         let mut test_poly = Polygon {
